@@ -1,0 +1,6 @@
+{
+  "name": "Brochure-to-Audio Learning Studio",
+  "description": "Upload product brochures to automatically generate structured learning scripts, engaging two-speaker podcasts, interactive quizzes, flashcards, and high-quality multilingual audio in English, Hindi, Bengali, and Marathi, completely grounded in the input document.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
