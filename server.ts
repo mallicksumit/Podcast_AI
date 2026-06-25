@@ -764,11 +764,37 @@ Generate and return strictly valid JSON matching the schema.`;
   }
 });
 
+function addWavHeader(pcmData: Uint8Array, sampleRate = 24000): Uint8Array {
+  const header = new ArrayBuffer(44);
+  const view = new DataView(header);
+  
+  view.setUint32(0, 0x52494646, false); // "RIFF"
+  view.setUint32(4, 36 + pcmData.length, true); // ChunkSize
+  view.setUint32(8, 0x57415645, false); // "WAVE"
+  
+  view.setUint32(12, 0x666d7420, false); // "fmt "
+  view.setUint32(16, 16, true); // Subchunk1Size
+  view.setUint16(20, 1, true); // AudioFormat
+  view.setUint16(22, 1, true); // NumChannels
+  view.setUint32(24, sampleRate, true); // SampleRate
+  view.setUint32(28, sampleRate * 2, true); // ByteRate
+  view.setUint16(32, 2, true); // BlockAlign
+  view.setUint16(34, 16, true); // BitsPerSample
+  
+  view.setUint32(36, 0x64617461, false); // "data"
+  view.setUint32(40, pcmData.length, true); // Subchunk2Size
+  
+  const result = new Uint8Array(44 + pcmData.length);
+  result.set(new Uint8Array(header), 0);
+  result.set(pcmData, 44);
+  return result;
+}
+
 // 6. Real Multilingual Audio Generation using Gemini TTS
 app.post("/api/generate-audio", async (req, res) => {
   try {
-    const { audioType, audioLanguage, textToSpeak, hostVoice, expertVoice, narratorVoice } = req.body;
-    if (!textToSpeak) {
+    const { audioType, audioLanguage, script, hostVoice, expertVoice, narratorVoice } = req.body;
+    if (!script) {
       return res.status(400).json({ success: false, error: "Missing script narrative to synthesize." });
     }
 
@@ -782,19 +808,17 @@ app.post("/api/generate-audio", async (req, res) => {
       console.log(`Calling Gemini Multi-Speaker TTS (Host Voice: ${activeHostVoice}, Expert Voice: ${activeExpertVoice}) in language: ${audioLanguage}`);
       
       // Clean and split lines to ensure standard capitalized matching Speaker titles
-      const sanitizedLines = textToSpeak.split("\n").map((line: string) => {
-        const trimmed = line.trim();
-        if (!trimmed) return "";
-        
-        // Normalize speaker colon prefix mapping if present (case-insensitive checks)
-        if (trimmed.toLowerCase().startsWith("host:")) {
-          return "Host:" + trimmed.substring(5);
-        }
-        if (trimmed.toLowerCase().startsWith("expert:")) {
-          return "Expert:" + trimmed.substring(7);
-        }
-        return trimmed;
-      }).filter((line: string) => line !== "").join("\n\n");
+      let sanitizedLines = "";
+      if (Array.isArray(script)) {
+        sanitizedLines = script.map((t: any) => {
+          let speaker = t.speaker || "Host";
+          if (speaker.toLowerCase().includes("host")) speaker = "Host";
+          if (speaker.toLowerCase().includes("expert")) speaker = "Expert";
+          return `${speaker}: ${t.text}`;
+        }).join("\n\n");
+      } else {
+        sanitizedLines = script;
+      }
 
       response = await executeWithRetry(
         () => {
@@ -831,6 +855,14 @@ app.post("/api/generate-audio", async (req, res) => {
       const activeNarratorVoice = narratorVoice || "Zephyr";
       // Single speaker learning format
       console.log(`Calling Gemini Single Speaker TTS (Voice: ${activeNarratorVoice}) in language: ${audioLanguage}`);
+      
+      let textToSpeak = "";
+      if (Array.isArray(script)) {
+        textToSpeak = script.map((s: any) => `${s.title}\n${s.content}`).join("\n\n");
+      } else {
+        textToSpeak = script;
+      }
+      
       const ttsPrompt = `Speak this training summary clearly like an expert educational tutor in ${audioLanguage}:\n\n${textToSpeak}`;
 
       response = await executeWithRetry(
@@ -866,11 +898,13 @@ app.post("/api/generate-audio", async (req, res) => {
       throw new Error("No inline audio data block was returned by Gemini TTS generator.");
     }
 
-    res.json({
-      success: true,
-      audioMime: "audio/pcm;rate=24000",
-      audioData: base64Audio
-    });
+    // Convert raw PCM to WAV
+    const rawBytes = Buffer.from(base64Audio, 'base64');
+    const wavBytes = addWavHeader(rawBytes, 24000);
+    
+    res.setHeader('Content-Type', 'audio/wav');
+    res.setHeader('Content-Disposition', `attachment; filename="${audioType}.wav"`);
+    res.send(wavBytes);
 
   } catch (error: any) {
     console.error("Audio Generation Error: ", error);

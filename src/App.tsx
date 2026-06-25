@@ -443,18 +443,11 @@ export default function App() {
       const currentLang = scriptLanguage;
       const targetLangScripts = activeDoc.scripts[currentLang] || activeDoc.scripts.english;
 
-      let textToSpeak = "";
+      let script: any = null;
       if (audioType === "podcast") {
-        const turns: SpeakerTurn[] = targetLangScripts.podcast[podcastLength] || [];
-        textToSpeak = turns.map((t) => `${t.speaker}: ${t.text}`).join("\n\n");
+        script = targetLangScripts.podcast[podcastLength] || [];
       } else {
-        const sections: ScriptSection[] = targetLangScripts.understanding[understandingLength] || [];
-        textToSpeak = sections.map((s) => `${s.title}\n${s.content}`).join("\n\n");
-      }
-
-      // Safeguard against very long speech formats on trial instances
-      if (textToSpeak.length > 5000) {
-        textToSpeak = textToSpeak.substring(0, 5000) + "...";
+        script = targetLangScripts.understanding[understandingLength] || [];
       }
 
       console.log(`Requesting synthesis for ${audioType} in language: ${currentLang}`);
@@ -465,29 +458,39 @@ export default function App() {
         body: JSON.stringify({
           audioType,
           audioLanguage: LANGUAGE_LABELS[currentLang],
-          textToSpeak,
+          script,
           hostVoice: selectedHostVoice,
           expertVoice: selectedExpertVoice,
           narratorVoice: selectedNarratorVoice,
         }),
       });
 
-      const data = await res.json();
-      if (data.success && data.audioData) {
-        // Convert base64 voice content back to streamable HTML audio URL
-        const rawBytes = Uint8Array.from(atob(data.audioData), (c) => c.charCodeAt(0));
-        const wavBytes = addWavHeader(rawBytes, 24000);
-        const audioBlob = new Blob([wavBytes], { type: "audio/wav" });
-        const audioUrl = URL.createObjectURL(audioBlob);
-
-        if (audioType === "podcast") {
-          setSynthesizedPodcastUrl(audioUrl);
-        } else {
-          setSynthesizedNarratorUrl(audioUrl);
-        }
-      } else {
-        setAudioError(data.error || "Failed synthesis output block.");
+      if (!res.ok) {
+        let errorMsg = "Failed synthesis output block.";
+        try {
+          const errText = await res.text();
+          const errObj = JSON.parse(errText);
+          errorMsg = errObj.error || errorMsg;
+        } catch (e) {}
+        throw new Error(errorMsg);
       }
+
+      const audioBlob = await res.blob();
+      const audioUrl = URL.createObjectURL(audioBlob);
+
+      if (audioType === "podcast") {
+        setSynthesizedPodcastUrl(audioUrl);
+      } else {
+        setSynthesizedNarratorUrl(audioUrl);
+      }
+      
+      // Auto-trigger download
+      const link = document.createElement("a");
+      link.href = audioUrl;
+      link.setAttribute("download", `${activeDoc.name.replace(/\.[^/.]+$/, "")}_${audioType}.wav`);
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
     } catch (err: any) {
       setAudioError(err.message || "Synthesizer error. Speech could not complete.");
     } finally {
