@@ -886,25 +886,68 @@ app.post("/api/generate-audio", async (req, res) => {
     }
 
     const parts = response.candidates?.[0]?.content?.parts || [];
-    let base64Audio = null;
+    let audioBuffers: Buffer[] = [];
+    let mimeType = 'audio/wav';
+    
     for (const part of parts) {
       if (part.inlineData?.data) {
-        base64Audio = part.inlineData.data;
-        break;
+        audioBuffers.push(Buffer.from(part.inlineData.data, 'base64'));
+        if (part.inlineData.mimeType) {
+          mimeType = part.inlineData.mimeType;
+        }
       }
     }
 
-    if (!base64Audio) {
+    if (audioBuffers.length === 0) {
       throw new Error("No inline audio data block was returned by Gemini TTS generator.");
     }
 
-    // Convert raw PCM to WAV
-    const rawBytes = Buffer.from(base64Audio, 'base64');
-    const wavBytes = addWavHeader(rawBytes, 24000);
+    // Process raw audio
+    const rawBytes = Buffer.concat(audioBuffers);
+    let outputBytes: Buffer | Uint8Array = rawBytes;
     
-    res.setHeader('Content-Type', 'audio/wav');
-    res.setHeader('Content-Disposition', `attachment; filename="${audioType}.wav"`);
-    res.send(wavBytes);
+    // Check magic bytes to determine actual format
+    const isWav = rawBytes.length > 4 && rawBytes[0] === 0x52 && rawBytes[1] === 0x49 && rawBytes[2] === 0x46 && rawBytes[3] === 0x46; // "RIFF"
+    const isMp3 = rawBytes.length > 2 && ((rawBytes[0] === 0xFF && (rawBytes[1] & 0xE0) === 0xE0) || (rawBytes[0] === 0x49 && rawBytes[1] === 0x44 && rawBytes[2] === 0x33)); // ID3 or Sync word
+    
+    let ext = 'wav';
+    let contentType = 'audio/wav';
+
+    if (isMp3 || mimeType.includes('mpeg') || mimeType.includes('mp3')) {
+      ext = 'mp3';
+      contentType = 'audio/mpeg';
+    } else if (isWav) {
+      ext = 'wav';
+      contentType = 'audio/wav';
+    } else {
+      // It's raw PCM, encode it to MP3 using lamejs
+      const lamejs = require('lamejs');
+      const encoder = new lamejs.Mp3Encoder(1, 24000, 128);
+      const pcm16 = new Int16Array(rawBytes.buffer, rawBytes.byteOffset, rawBytes.length / 2);
+      
+      const mp3Chunks: Buffer[] = [];
+      const sampleBlockSize = 1152;
+      for (let i = 0; i < pcm16.length; i += sampleBlockSize) {
+        const chunk = pcm16.subarray(i, i + sampleBlockSize);
+        const mp3buf = encoder.encodeBuffer(chunk);
+        if (mp3buf.length > 0) {
+          mp3Chunks.push(Buffer.from(mp3buf));
+        }
+      }
+      
+      const mp3buf = encoder.flush();
+      if (mp3buf.length > 0) {
+        mp3Chunks.push(Buffer.from(mp3buf));
+      }
+      
+      outputBytes = Buffer.concat(mp3Chunks);
+      ext = 'mp3';
+      contentType = 'audio/mpeg';
+    }
+    
+    res.setHeader('Content-Type', contentType);
+    res.setHeader('Content-Disposition', `attachment; filename="${audioType}.${ext}"`);
+    res.send(Buffer.from(outputBytes));
 
   } catch (error: any) {
     console.error("Audio Generation Error: ", error);

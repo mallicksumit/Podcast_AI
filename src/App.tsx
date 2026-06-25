@@ -46,36 +46,6 @@ import {
 } from "./types";
 import pptxgen from "pptxgenjs";
 
-// Helper function to inject a valid 44-byte WAV header over raw 24kHz 16-bit Mono PCM data
-function addWavHeader(pcmData: Uint8Array, sampleRate = 24000): Uint8Array {
-  const header = new ArrayBuffer(44);
-  const view = new DataView(header);
-  
-  // "RIFF" chunk descriptor
-  view.setUint32(0, 0x52494646, false); // "RIFF" in big-endian
-  view.setUint32(4, 36 + pcmData.length, true); // ChunkSize (36 + data length)
-  view.setUint32(8, 0x57415645, false); // "WAVE" in big-endian
-  
-  // "fmt " sub-chunk
-  view.setUint32(12, 0x666d7420, false); // "fmt " in big-endian
-  view.setUint32(16, 16, true); // Subchunk1Size (16 for PCM)
-  view.setUint16(20, 1, true); // AudioFormat (1 = PCM)
-  view.setUint16(22, 1, true); // NumChannels (1 = Mono)
-  view.setUint32(24, sampleRate, true); // SampleRate (e.g. 24000)
-  view.setUint32(28, sampleRate * 2, true); // ByteRate (SampleRate * NumChannels * BitsPerSample / 8) -> 48000
-  view.setUint16(32, 2, true); // BlockAlign (NumChannels * BitsPerSample / 8) -> 2
-  view.setUint16(34, 16, true); // BitsPerSample (16 bits)
-  
-  // "data" sub-chunk
-  view.setUint32(36, 0x64617461, false); // "data" in big-endian
-  view.setUint32(40, pcmData.length, true); // Subchunk2Size (length of PCM data)
-  
-  const result = new Uint8Array(44 + pcmData.length);
-  result.set(new Uint8Array(header), 0);
-  result.set(pcmData, 44);
-  return result;
-}
-
 export default function App() {
   // Documents state
   const [documents, setDocuments] = useState<BrochureDocument[]>([]);
@@ -477,6 +447,7 @@ export default function App() {
 
       const audioBlob = await res.blob();
       const audioUrl = URL.createObjectURL(audioBlob);
+      const ext = audioBlob.type.includes('mpeg') ? 'mp3' : 'wav';
 
       if (audioType === "podcast") {
         setSynthesizedPodcastUrl(audioUrl);
@@ -487,7 +458,7 @@ export default function App() {
       // Auto-trigger download
       const link = document.createElement("a");
       link.href = audioUrl;
-      link.setAttribute("download", `${activeDoc.name.replace(/\.[^/.]+$/, "")}_${audioType}.wav`);
+      link.setAttribute("download", `${activeDoc.name.replace(/\.[^/.]+$/, "")}_${audioType}.${ext}`);
       document.body.appendChild(link);
       link.click();
       document.body.removeChild(link);
